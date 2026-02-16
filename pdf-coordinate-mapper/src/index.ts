@@ -10,8 +10,12 @@ export type {
 export { PdfCoordinateMapper } from "./PdfCoordinateMapper";
 export type { PdfCoordinateMapperProps } from "./PdfCoordinateMapper";
 
-// Filler
+// Coordinate-based filler
 export { fillPdf } from "./fillPdf";
+
+// AcroForm (fillable PDF) utilities
+export { getFormFields, fillFormPdf } from "./fillFormPdf";
+export type { FormFieldInfo } from "./fillFormPdf";
 
 // Download helper
 export { downloadFilledPdf } from "./downloadPdf";
