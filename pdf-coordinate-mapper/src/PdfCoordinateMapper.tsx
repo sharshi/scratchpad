@@ -36,16 +36,23 @@ interface MarkerProps {
   mapping: FieldMapping;
   scale: number;
   selected: boolean;
+  isDragging: boolean;
   onSelect: () => void;
   onRemove: () => void;
+  onDragStart: (e: React.MouseEvent) => void;
 }
 
-function Marker({ mapping, scale, selected, onSelect, onRemove }: MarkerProps) {
+function Marker({ mapping, scale, selected, isDragging, onSelect, onRemove, onDragStart }: MarkerProps) {
   return (
     <div
-      onClick={(e) => {
+      onMouseDown={(e) => {
+        if (e.button !== 0) return;
         e.stopPropagation();
         onSelect();
+        onDragStart(e);
+      }}
+      onClick={(e) => {
+        e.stopPropagation();
       }}
       style={{
         position: "absolute",
@@ -58,7 +65,7 @@ function Marker({ mapping, scale, selected, onSelect, onRemove }: MarkerProps) {
           ? "rgba(37,99,235,0.15)"
           : "rgba(107,114,128,0.10)",
         borderRadius: 3,
-        cursor: "pointer",
+        cursor: isDragging ? "grabbing" : "grab",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -66,7 +73,7 @@ function Marker({ mapping, scale, selected, onSelect, onRemove }: MarkerProps) {
         color: selected ? "#1e40af" : "#374151",
         fontFamily: "sans-serif",
         userSelect: "none",
-        zIndex: 10,
+        zIndex: selected ? 20 : 10,
       }}
     >
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", padding: "0 4px" }}>
@@ -76,6 +83,10 @@ function Marker({ mapping, scale, selected, onSelect, onRemove }: MarkerProps) {
         onClick={(e) => {
           e.stopPropagation();
           onRemove();
+        }}
+        onMouseDown={(e) => {
+          // Prevent drag from starting when clicking the remove button
+          e.stopPropagation();
         }}
         style={{
           position: "absolute",
@@ -123,6 +134,12 @@ export function PdfCoordinateMapper({
   const [activeField, setActiveField] = useState<string>(fieldNames[0] ?? "");
   const pageRef = useRef<HTMLDivElement>(null);
 
+  /* ---- drag state ---- */
+  const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
+  const dragStartRef = useRef<{ mouseX: number; mouseY: number; origX: number; origY: number } | null>(null);
+  // Suppress the next page-click after a drag so we don't place a new marker
+  const suppressClickRef = useRef(false);
+
   // Propagate changes upward
   useEffect(() => {
     onChange?.(mappings);
@@ -135,6 +152,11 @@ export function PdfCoordinateMapper({
   /* ---- click on the page to place a new marker ---- */
   const handlePageClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
+      // If we just finished a drag, don't place a new marker
+      if (suppressClickRef.current) {
+        suppressClickRef.current = false;
+        return;
+      }
       if (!pageRef.current || !activeField) return;
       const rect = pageRef.current.getBoundingClientRect();
       const x = (e.clientX - rect.left) / scale;
@@ -157,6 +179,59 @@ export function PdfCoordinateMapper({
     },
     [activeField, currentPage, scale, mappings.length],
   );
+
+  /* ---- drag handlers ---- */
+  const handleMarkerDragStart = useCallback(
+    (idx: number, e: React.MouseEvent) => {
+      const mapping = mappings[idx];
+      if (!mapping) return;
+      setDraggingIdx(idx);
+      dragStartRef.current = {
+        mouseX: e.clientX,
+        mouseY: e.clientY,
+        origX: mapping.x,
+        origY: mapping.y,
+      };
+    },
+    [mappings],
+  );
+
+  useEffect(() => {
+    if (draggingIdx === null) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (dragStartRef.current === null || draggingIdx === null) return;
+      const { mouseX, mouseY, origX, origY } = dragStartRef.current;
+      const dx = (e.clientX - mouseX) / scale;
+      const dy = (e.clientY - mouseY) / scale;
+      const newX = Math.round((origX + dx) * 100) / 100;
+      const newY = Math.round((origY + dy) * 100) / 100;
+
+      setMappings((prev) =>
+        prev.map((m, i) => (i === draggingIdx ? { ...m, x: newX, y: newY } : m)),
+      );
+    };
+
+    const handleMouseUp = (e: MouseEvent) => {
+      if (dragStartRef.current !== null) {
+        const { mouseX, mouseY } = dragStartRef.current;
+        const dist = Math.abs(e.clientX - mouseX) + Math.abs(e.clientY - mouseY);
+        // If the mouse actually moved, suppress the click that follows mouseup
+        if (dist > 3) {
+          suppressClickRef.current = true;
+        }
+      }
+      setDraggingIdx(null);
+      dragStartRef.current = null;
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [draggingIdx, scale]);
 
   const removeMapping = useCallback((idx: number) => {
     setMappings((prev) => prev.filter((_, i) => i !== idx));
@@ -266,8 +341,10 @@ export function PdfCoordinateMapper({
               mapping={m}
               scale={scale}
               selected={selectedIdx === idx}
+              isDragging={draggingIdx === idx}
               onSelect={() => setSelectedIdx(idx)}
               onRemove={() => removeMapping(idx)}
+              onDragStart={(e) => handleMarkerDragStart(idx, e)}
             />
           ))}
         </div>
